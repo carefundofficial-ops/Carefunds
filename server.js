@@ -249,6 +249,53 @@ If you did not request this, you can ignore this email.`,
 <p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`
   });
 }
+ async function sendConfirmationEmail(name,email,token){
+  const base=String(process.env.APP_BASE_URL||'http://localhost:3000').replace(/\/$/,'');
+  const link=`${base}/?email_confirm=${encodeURIComponent(token)}`;
+
+  if(!process.env.RESEND_API_KEY){
+    console.log(`CareFund email service not configured for ${email}`);
+    return false;
+  }
+
+  const from=process.env.MAIL_FROM||'onboarding@resend.dev';
+
+  try{
+    const response=await fetch('https://api.resend.com/emails',{
+      method:'POST',
+      headers:{
+        'Authorization':`Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        from,
+        to:[email],
+        subject:'Confirm your CareFund registration',
+        text:`Hello ${name},
+
+Confirm your CareFund registration by opening this link:
+${link}
+
+This link expires in 30 minutes.`,
+        html:`<p>Hello ${String(name).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p>
+<p>Confirm your CareFund registration by tapping the button below.</p>
+<p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm email &amp; continue registration</a></p>
+<p>This link expires in 30 minutes.</p>`
+      })
+    });
+
+    if(!response.ok){
+      const errorText=await response.text();
+      console.error(`CareFund Resend email error: ${errorText}`);
+      return false;
+    }
+
+    return true;
+  }catch(e){
+    console.error('CareFund Resend email error:',e);
+    return false;
+  }
+}
 app.post("/api/auth/register/start",async(req,res)=>{try{
   const {name,email,role="donor"}=req.body;
   const n=String(name||'').trim(), e=String(email||'').trim().toLowerCase();
