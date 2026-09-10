@@ -300,63 +300,110 @@ app.post("/api/auth/register/start",async(req,res)=>{try{
   const {name,email,role="donor"}=req.body;
   const n=String(name||'').trim(), e=String(email||'').trim().toLowerCase();
   if(!n||!e)return res.status(400).json({error:"Full name and email address are required"});
-  if(!["donor","fundraiser"].includes(role))return res.status(400).json({error:"Invalid role"});
-  if(!/^\S+@\S+\.\S+$/.test(e))return res.status(400).json({error:"Enter a valid email address"});
-  if(db.prepare("SELECT id FROM users WHERE email=?").get(e))return res.status(409).json({error:"Email already registered. Please log in."});
-  const raw=crypto.randomBytes(32).toString('hex'), hash=crypto.createHash('sha256').update(raw).digest('hex');
-  db.prepare("DELETE FROM registration_confirmations WHERE email=? OR expires_at<=CURRENT_TIMESTAMP").run(e);
-  db.prepare("INSERT INTO registration_confirmations(token_hash,name,email,role,expires_at) VALUES(?,?,?,?,datetime('now','+30 minutes'))").run(hash,n,e,role);
-  const sent=await sendConfirmationEmail(n,e,raw);
-  res.status(201).json({ok:true,email:e,emailSent:sent,message:sent?'Confirmation link sent to your email.':'Email service is not configured; the confirmation link was logged by the server.'});
-}catch(e){console.error(e);res.status(500).json({error:"Could not start registration"})}});
+async function sendResendEmail({name,email,subject,text,html}){
+  if(!process.env.RESEND_API_KEY){
+    console.log(`CareFund email service not configured for ${email}`);
+    return false;
+  }
 
-app.get("/api/auth/confirm-email",(req,res)=>{try{
-  const raw=String(req.query.token||''), hash=crypto.createHash('sha256').update(raw).digest('hex');
-  const p=db.prepare("SELECT name,email,role,expires_at FROM registration_confirmations WHERE token_hash=? AND expires_at>CURRENT_TIMESTAMP").get(hash);
-  if(!p)return res.status(400).json({error:"This confirmation link is invalid or expired. Please start registration again."});
-  res.json({ok:true,name:p.name,email:p.email,role:p.role});
-}catch(e){res.status(400).json({error:"Invalid confirmation link"})}});
+  const from=process.env.MAIL_FROM||'onboarding@resend.dev';
 
-app.post("/api/auth/register/complete",async(req,res)=>{try{
-  const {token,password,country="",dateOfBirth="",gender="",state="",address="",occupation="",phone=""}=req.body;
-  const raw=String(token||''), hashToken=crypto.createHash('sha256').update(raw).digest('hex');
-  const p=db.prepare("SELECT * FROM registration_confirmations WHERE token_hash=? AND expires_at>CURRENT_TIMESTAMP").get(hashToken);
-  if(!p)return res.status(400).json({error:"This confirmation link is invalid or expired. Please start registration again."});
-  if(!password||String(password).length<8)return res.status(400).json({error:"Password must be at least 8 characters"});
-  const hash=await bcrypt.hash(String(password),12);
-  const dob=String(dateOfBirth||'');
-  let age=null;
-  if(dob){const d=new Date(dob+'T00:00:00'); if(Number.isNaN(d.getTime()))return res.status(400).json({error:"Enter a valid date of birth"}); const now=new Date(); age=now.getFullYear()-d.getFullYear()-((now.getMonth()<d.getMonth()||(now.getMonth()===d.getMonth()&&now.getDate()<d.getDate()))?1:0); if(age<18)return res.status(400).json({error:"You must be 18 or older to register"});}
-  const r=db.prepare("INSERT INTO users(name,email,password_hash,role,country,date_of_birth,gender,age,state,address,occupation,phone,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)").run(p.name,p.email,hash,p.role,String(country).trim(),dob,String(gender||''),age,String(state||''),String(address||''),String(occupation||''),String(phone||'').trim(),1);
-  db.prepare("DELETE FROM registration_confirmations WHERE token_hash=?").run(hashToken);
-  const u=db.prepare("SELECT id,name,email,role,country,profile_photo,kyc_status,liveness_status,gender,age,state,address,occupation FROM users WHERE id=?").get(r.lastInsertRowid);
-  const device=issueTrustedDevice(u.id); setDeviceCookie(res,device.raw); res.status(201).json({user:u,token:signUser(u,device.hash),emailVerified:true});
-}catch(e){console.error(e);res.status(500).json({error:e.code==='SQLITE_CONSTRAINT_UNIQUE'?'Email already registered':'Registration failed'})}});
-app.post("/api/auth/change-password",authRequired,async(req,res)=>{try{const current=String(req.body.currentPassword||''),next=String(req.body.newPassword||''),confirm=String(req.body.confirmPassword||'');if(next.length<8)return res.status(400).json({error:'New password must be at least 8 characters'});if(next!==confirm)return res.status(400).json({error:'Passwords do not match'});const u=db.prepare("SELECT * FROM users WHERE id=?").get(req.user.id);if(!u||!(await bcrypt.compare(current,u.password_hash)))return res.status(401).json({error:'Current password is incorrect'});const hash=await bcrypt.hash(next,12);db.prepare("UPDATE users SET password_hash=?,password_changed_at=CURRENT_TIMESTAMP WHERE id=?").run(hash,u.id);db.prepare("DELETE FROM password_resets WHERE user_id=?").run(u.id);db.prepare("UPDATE login_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND session_id<>? AND revoked_at IS NULL").run(u.id,req.user.sid);const until=u.role==='fundraiser'?new Date(Date.now()+24*3600000).toISOString():null;res.json({ok:true,role:u.role,withdrawalLockedUntil:until,message:u.role==='fundraiser'?'Password changed successfully. Withdrawals are disabled for 24 hours.':'Password changed successfully.'});}catch(e){console.error(e);res.status(500).json({error:'Could not change password'})}});
-app.post("/api/auth/forgot-password",async(req,res)=>{try{
-  const email=String(req.body.email||'').trim().toLowerCase();
-  if(!/^\S+@\S+\.\S+$/.test(email))return res.status(400).json({error:'Enter a valid email address'});
-  const u=db.prepare("SELECT id,name,email,role FROM users WHERE email=?").get(email);
-  db.prepare("DELETE FROM password_resets WHERE expires_at<=CURRENT_TIMESTAMP").run();
-  if(!u)return res.json({ok:true,message:'If that email is registered, a password reset link has been sent.'});
-  db.prepare("DELETE FROM password_resets WHERE user_id=?").run(u.id);
-  const raw=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(raw).digest('hex');
-  db.prepare("INSERT INTO password_resets(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 minutes'))").run(hash,u.id);
-  const sent=await sendPasswordResetEmail(u.name,u.email,raw);
-  res.json({ok:true,emailSent:sent,message:'If that email is registered, a password reset link has been sent.'});
-}catch(e){console.error(e);res.status(500).json({error:'Could not start password reset'})}});
-app.get("/api/auth/reset-password",(req,res)=>{const raw=String(req.query.token||''),hash=crypto.createHash('sha256').update(raw).digest('hex');const p=db.prepare("SELECT pr.expires_at,u.name,u.email,u.role FROM password_resets pr JOIN users u ON u.id=pr.user_id WHERE pr.token_hash=? AND pr.expires_at>CURRENT_TIMESTAMP").get(hash);if(!p)return res.status(400).json({error:'This password reset link is invalid or expired. Please request a new one.'});res.json({ok:true,name:p.name,email:p.email,role:p.role});});
-app.post("/api/auth/reset-password",async(req,res)=>{try{const raw=String(req.body.token||''),password=String(req.body.password||''),confirm=String(req.body.confirmPassword||'');if(password.length<8)return res.status(400).json({error:'Password must be at least 8 characters'});if(password!==confirm)return res.status(400).json({error:'Passwords do not match'});const hashToken=crypto.createHash('sha256').update(raw).digest('hex'),p=db.prepare("SELECT * FROM password_resets WHERE token_hash=? AND expires_at>CURRENT_TIMESTAMP").get(hashToken);if(!p)return res.status(400).json({error:'This password reset link is invalid or expired. Please request a new one.'});const hash=await bcrypt.hash(password,12);db.prepare("UPDATE users SET password_hash=?,password_changed_at=CURRENT_TIMESTAMP WHERE id=?").run(hash,p.user_id);db.prepare("DELETE FROM password_resets WHERE user_id=?").run(p.user_id);db.prepare("UPDATE login_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=? AND revoked_at IS NULL").run(p.user_id);db.prepare("DELETE FROM trusted_devices WHERE user_id=?").run(p.user_id);const u=db.prepare("SELECT id,name,email,role,country,profile_photo,kyc_status,liveness_status FROM users WHERE id=?").get(p.user_id);const device=issueTrustedDevice(u.id); setDeviceCookie(res,device.raw); res.json({ok:true,user:u,token:signUser(u,device.hash),role:u.role,withdrawalLockedUntil:u.role==='fundraiser'?new Date(Date.now()+24*3600000).toISOString():null});}catch(e){console.error(e);res.status(500).json({error:'Could not reset password'})}});
-app.post("/api/auth/login",loginLimit,async(req,res)=>{try{const email=String(req.body.email||"").trim().toLowerCase(),password=String(req.body.password||"");const u=db.prepare("SELECT * FROM users WHERE email=?").get(email);if(!u||!(await bcrypt.compare(password,u.password_hash)))return res.status(401).json({error:"Invalid email or password"});if(u.role!=="admin"&&!u.email_verified)return res.status(403).json({error:"Please confirm your email before logging in"});let trusted=trustedDeviceFor(req,u.id);if(!trusted){const deviceCount=Number(db.prepare("SELECT COUNT(*) n FROM trusted_devices WHERE user_id=?").get(u.id)?.n||0);if(deviceCount===0){const device=issueTrustedDevice(u.id);setDeviceCookie(res,device.raw);trusted=device;}else{db.prepare("DELETE FROM login_challenges WHERE user_id=? OR expires_at<=CURRENT_TIMESTAMP").run(u.id);const raw=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(raw).digest('hex');db.prepare("INSERT INTO login_challenges(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 minutes'))").run(hash,u.id);const sent=await sendNewDeviceLoginEmail(u.name,u.email,raw);return res.status(202).json({requiresDeviceConfirmation:true,emailSent:sent,message:sent?'For your security, this phone or computer is not trusted yet. We sent a confirmation link to your CareFund email. Open it on this device to complete login.':'For your security, this phone or computer is not trusted yet. The confirmation link was logged by the server because email service is not configured.'});}}const safe={id:u.id,name:u.name,email:u.email,role:u.role,country:u.country,profilePhoto:u.profile_photo,kycStatus:u.kyc_status,livenessStatus:u.liveness_status,passwordChangedAt:u.password_changed_at};res.json({user:safe,token:signUser(safe,trusted.hash)});}catch(e){console.error(e);res.status(500).json({error:"Could not log in"})}});
-app.get("/api/auth/confirm-device",(req,res)=>{try{const raw=String(req.query.token||''),hash=crypto.createHash('sha256').update(raw).digest('hex');const c=db.prepare("SELECT * FROM login_challenges WHERE token_hash=? AND expires_at>CURRENT_TIMESTAMP").get(hash);if(!c)return res.status(400).json({error:"This new-device confirmation link is invalid or expired. Please log in again to request a new link."});const u=db.prepare("SELECT id,name,email,role,country,profile_photo,kyc_status,liveness_status,password_changed_at,email_verified FROM users WHERE id=?").get(c.user_id);if(!u)return res.status(400).json({error:"Account not found"});const device=issueTrustedDevice(u.id);db.prepare("DELETE FROM login_challenges WHERE user_id=?").run(u.id);setDeviceCookie(res,device.raw);const safe={id:u.id,name:u.name,email:u.email,role:u.role,country:u.country,profilePhoto:u.profile_photo,kycStatus:u.kyc_status,livenessStatus:u.liveness_status,passwordChangedAt:u.password_changed_at};res.json({ok:true,user:safe,token:signUser(safe,device.hash),message:"New device confirmed. You are now logged in on this device."});}catch(e){console.error(e);res.status(500).json({error:"Could not confirm this device"})}});
-app.post("/api/auth/logout",authRequired,(req,res)=>{db.prepare("UPDATE login_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE session_id=?").run(req.user.sid);res.json({ok:true});});
-app.get("/api/me",authRequired,(req,res)=>{let u=db.prepare("SELECT id,name,email,role,country,profile_photo,date_of_birth,gender,age,state,address,occupation,kyc_status,liveness_status,account_status,receipt_deadline,next_campaign_at,password_changed_at,created_at FROM users WHERE id=?").get(req.user.id);if(u.role==='fundraiser'){const w=db.prepare("SELECT * FROM withdrawals WHERE requested_by=? AND status='sent' ORDER BY id DESC LIMIT 1").get(req.user.id);if(w&&!w.confirmation_started_at){const start=new Date().toISOString(),deadline=new Date(Date.now()+24*3600*1000).toISOString();db.prepare("UPDATE withdrawals SET confirmation_started_at=?,confirmation_deadline=?,confirmation_notified_at=? WHERE id=?").run(start,deadline,start,w.id);db.prepare("UPDATE users SET receipt_deadline=? WHERE id=?").run(deadline,req.user.id);notify(req.user.id,'confirmation_window','24-hour confirmation window started','Your withdrawal was sent. Please confirm receipt within 24 hours.',{withdrawalId:w.id,deadline});}const active=db.prepare("SELECT * FROM withdrawals WHERE requested_by=? AND status='sent' ORDER BY id DESC LIMIT 1").get(req.user.id);if(active?.confirmation_deadline&&new Date(active.confirmation_deadline)<=new Date()){db.prepare("UPDATE users SET account_status='suspended' WHERE id=?").run(req.user.id);db.prepare("UPDATE withdrawals SET suspension_applied=1 WHERE id=?").run(active.id);u={...u,account_status:'suspended'};}}res.json({user:u,donor:req.user.role==='donor'?donorStats(req.user.id):null});});
-app.post("/api/profile/photo",authRequired,upload.single("photo"),(req,res)=>{if(!req.file)return res.status(400).json({error:"Photo required"});db.prepare("UPDATE users SET profile_photo=? WHERE id=?").run(req.file.filename,req.user.id);res.json({ok:true,file:req.file.filename});});
-app.post("/api/liveness",authRequired,upload.single("liveness"),(req,res)=>{if(!req.file)return res.status(400).json({error:"Camera capture required"});db.prepare("UPDATE users SET liveness_status='verified',liveness_file=? WHERE id=?").run(req.file.filename,req.user.id);res.json({ok:true,status:"verified",message:"Liveness capture saved for CareFund verification. Admin approval is still required."});});
-app.get("/api/campaigns",(req,res)=>{const rows=db.prepare("SELECT * FROM campaigns WHERE status='approved' AND raised_usdt<goal_usdt AND withdrawal_disabled_at IS NULL AND public_hidden_at IS NULL ORDER BY created_at DESC").all();res.json({campaigns:rows.map(pub)});});
-app.get("/api/campaigns/:id",(req,res)=>{const c=db.prepare("SELECT * FROM campaigns WHERE id=? AND status='approved' AND verified=1 AND (public_hidden_at IS NULL OR datetime(public_hidden_at)>datetime('now'))").get(req.params.id);if(!c)return res.status(404).json({error:"Campaign not found"});const files=db.prepare("SELECT id,kind,file_name,stored_name,created_at FROM campaign_files WHERE campaign_id=? AND kind='photo' ORDER BY id ASC").all(c.id).map(f=>({...f,url:`/uploads/${encodeURIComponent(f.stored_name)}`}));res.json({campaign:pub(c),files});});
-app.post("/api/campaigns",authRequired,roleRequired("fundraiser"),(req,res)=>{const existing=db.prepare("SELECT id,status FROM campaigns WHERE user_id=? ORDER BY id DESC LIMIT 1").get(req.user.id);if(existing){const completed=db.prepare("SELECT id FROM withdrawals WHERE campaign_id=? AND requested_by=? AND status='received' LIMIT 1").get(existing.id,req.user.id);if(!completed)return res.status(400).json({error:'You can only have one campaign at a time. Complete the current campaign and withdrawal cycle before creating another.'});}const u0=db.prepare("SELECT account_status,next_campaign_at FROM users WHERE id=?").get(req.user.id);if(u0?.account_status==='suspended')return res.status(403).json({error:'Your account is restricted. Contact CareFund support.'});if(u0?.next_campaign_at&&new Date(u0.next_campaign_at)>new Date())return res.status(400).json({error:`You can create another campaign after ${u0.next_campaign_at}.`});const{title,patientName,story,goalUsdt,creatorAge,victimIsMinor,relationship,hospitalName,hospitalAddress,hospitalPhone,doctorName,diagnosis,treatmentType,estimatedCostUsdt}=req.body;const age=Number(creatorAge),goal=Number(goalUsdt),estimated=Number(estimatedCostUsdt||0);if(!title||!patientName||!story||!Number.isFinite(goal)||goal<=0||!Number.isInteger(age))return res.status(400).json({error:"Complete campaign details and creator age are required"});if(age<18)return res.status(403).json({error:"Campaign creators must be 18 or older"});const u=db.prepare("SELECT liveness_status FROM users WHERE id=?").get(req.user.id);if(u.liveness_status!=='verified')return res.status(403).json({error:"Complete the liveness camera check before creating a campaign"});if(Number(victimIsMinor)===1&&!String(relationship||"").trim())return res.status(400).json({error:"Relationship to the minor is required"});if(!String(hospitalName||"").trim()||!String(hospitalAddress||"").trim())return res.status(400).json({error:"Hospital name and address are required for medical campaign verification"});if(!String(diagnosis||"").trim()||!String(treatmentType||"").trim())return res.status(400).json({error:"Diagnosis and treatment information are required"});const r=db.prepare("INSERT INTO campaigns(user_id,title,patient_name,story,goal_usdt,creator_age,victim_is_minor,relationship,creator_liveness_status,hospital_name,hospital_address,hospital_phone,doctor_name,diagnosis,treatment_type,estimated_cost_usdt,verification_status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(req.user.id,String(title).trim(),String(patientName).trim(),String(story).trim(),goal,age,Number(victimIsMinor)?1:0,String(relationship||"").trim(),"verified",String(hospitalName).trim(),String(hospitalAddress).trim(),String(hospitalPhone||"").trim(),String(doctorName||"").trim(),String(diagnosis).trim(),String(treatmentType).trim(),Number.isFinite(estimated)?estimated:0,'pending');res.status(201).json({campaign:pub(db.prepare("SELECT * FROM campaigns WHERE id=?").get(r.lastInsertRowid))});});
-app.post("/api/campaigns/:id/submit",authRequired,roleRequired("fundraiser"),(req,res)=>{const c=db.prepare("SELECT * FROM campaigns WHERE id=? AND user_id=?").get(req.params.id,req.user.id);if(!c)return res.status(404).json({error:"Campaign not found"});if(!['draft','rejected'].includes(c.status))return res.status(400).json({error:"Campaign cannot be submitted"});if(c.creator_liveness_status!=='verified')return res.status(403).json({error:"Liveness verification required"});db.prepare("UPDATE campaigns SET status='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(c.id);const admin=db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();if(admin)notify(admin.id,'campaign_review','New campaign awaiting verification',`${c.title} was submitted for review.`,{campaignId:c.id});res.json({ok:true,status:'pending'});});
+  try{
+    const response=await fetch('https://api.resend.com/emails',{
+      method:'POST',
+      headers:{
+        'Authorization':`Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        from,
+        to:[email],
+        subject,
+        text,
+        html
+      })
+    });
+
+    if(!response.ok){
+      const errorText=await response.text();
+      console.error(`CareFund Resend email error: ${errorText}`);
+      return false;
+    }
+
+    return true;
+  }catch(e){
+    console.error('CareFund Resend email error:',e);
+    return false;
+  }
+}
+
+async function sendConfirmationEmail(name,email,token){
+  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const link=`${base}/?email_confirm=${encodeURIComponent(token)}`;
+
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Confirm your CareFund registration',
+    text:`Hello ${name},
+
+Confirm your CareFund registration by opening this link:
+${link}
+
+This link expires in 30 minutes.`,
+    html:`<p>Hello ${String(name).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p>
+<p>Confirm your CareFund registration by tapping the button below.</p>
+<p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm email &amp; continue registration</a></p>
+<p>This link expires in 30 minutes.</p>`
+  });
+}
+
+async function sendNewDeviceLoginEmail(name,email,token){
+  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const link=`${base}/?device_confirm=${encodeURIComponent(token)}`;
+
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Confirm new device login to CareFund',
+    text:`Hello ${name},
+
+A login to your CareFund account was detected from a new device.
+
+Confirm this login by opening:
+${link}
+
+If you did not attempt this login, please reset your password immediately.`,
+    html:`<p>Hello ${String(name).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p>
+<p>A login to your CareFund account was detected from a new device.</p>
+<p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm new device login</a></p>
+<p>If you did not attempt this login, please reset your password immediately.</p>`
+  });
+}
+
+async function sendPasswordResetEmail(name,email,token){
+  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const link=`${base}/?reset_token=${encodeURIComponent(token)}`;
+
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Reset your CareFund password',
+    text:`Hello ${name},
+
+A password reset was requested for your CareFund account.
+
+Reset your password by opening:
+${link}
+
+This link expires in 30 minutes.`,
+    html:`<p>Hello ${String(name).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p>
+<p>A password reset was requested for your CareFund account.</p>
+<p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p>
+<p>This link expires in 30 minutes.</p>`
+  });
+}
+ app.post("/api/campaigns/:id/submit",authRequired,roleRequired("fundraiser"),(req,res)=>{const c=db.prepare("SELECT * FROM campaigns WHERE id=? AND user_id=?").get(req.params.id,req.user.id);if(!c)return res.status(404).json({error:"Campaign not found"});if(!['draft','rejected'].includes(c.status))return res.status(400).json({error:"Campaign cannot be submitted"});if(c.creator_liveness_status!=='verified')return res.status(403).json({error:"Liveness verification required"});db.prepare("UPDATE campaigns SET status='pending',updated_at=CURRENT_TIMESTAMP WHERE id=?").run(c.id);const admin=db.prepare("SELECT id FROM users WHERE role='admin' LIMIT 1").get();if(admin)notify(admin.id,'campaign_review','New campaign awaiting verification',`${c.title} was submitted for review.`,{campaignId:c.id});res.json({ok:true,status:'pending'});});
 function saveFiles(req,res,kind){const c=db.prepare("SELECT * FROM campaigns WHERE id=? AND user_id=?").get(req.params.id,req.user.id);if(!c)return res.status(404).json({error:"Campaign not found"});if(!req.files?.length)return res.status(400).json({error:"No files uploaded"});const ins=db.prepare("INSERT INTO campaign_files(campaign_id,kind,file_name,stored_name) VALUES(?,?,?,?)");db.transaction(fs=>fs.forEach(f=>ins.run(c.id,kind,f.originalname,f.filename)))(req.files);res.status(201).json({uploaded:req.files.map(f=>({name:f.originalname,kind}))});}
 app.post("/api/campaigns/:id/photos",authRequired,roleRequired("fundraiser"),upload.array("photos",4),(req,res)=>saveFiles(req,res,'photo'));
 app.post("/api/campaigns/:id/documents",authRequired,roleRequired("fundraiser"),upload.array("documents",10),(req,res)=>saveFiles(req,res,'document'));
