@@ -1,5 +1,5 @@
 require("dotenv").config();
-const express=require("express"); const helmet=require("helmet"); const bcrypt=require("bcryptjs"); const multer=require("multer"); const path=require("path"); const fs=require("fs"); const crypto=require("crypto"); const jwt=require("jsonwebtoken"); const nodemailer=require("nodemailer");
+const express=require("express"); const helmet=require("helmet"); const bcrypt=require("bcryptjs"); const multer=require("multer"); const path=require("path"); const fs=require("fs"); const crypto=require("crypto"); const jwt=require("jsonwebtoken");
 const db=require("./db"); const {signUser,authRequired,roleRequired}=require("./auth"); const {findUsdtTransfer,WALLET,USDT}=require("./tron");
 if(!process.env.JWT_SECRET) throw new Error("JWT_SECRET is required");
 const app=express(), PORT=Number(process.env.PORT||3000), uploadDir=path.join(__dirname,"..","uploads"); fs.mkdirSync(uploadDir,{recursive:true});
@@ -60,40 +60,103 @@ app.get('/api/admin/analytics',authRequired,roleRequired('admin'),(req,res)=>{
 app.get("/api/platform-rating",(req,res)=>{const rows=db.prepare(`SELECT r.rating,r.review,r.created_at,u.name,u.role FROM platform_ratings r JOIN users u ON u.id=r.user_id WHERE r.review<>'' ORDER BY r.created_at DESC LIMIT 20`).all();res.json({trust:platformTrust(),reviews:rows.map(x=>({rating:x.rating,review:x.review,name:x.name,role:x.role,createdAt:x.created_at}))});});
 app.get("/api/platform-rating/me",authRequired,(req,res)=>res.json({rating:db.prepare("SELECT rating,review,created_at,updated_at FROM platform_ratings WHERE user_id=?").get(req.user.id)||null}));
 app.post("/api/platform-rating",authRequired,(req,res)=>{if(!['donor','fundraiser'].includes(req.user.role))return res.status(403).json({error:'Only donor and fundraiser accounts can rate CareFund'});const rating=Number(req.body.rating),review=String(req.body.review||'').trim().slice(0,500);if(!Number.isInteger(rating)||rating<1||rating>5)return res.status(400).json({error:'Choose a rating from 1 to 5 stars'});let eligible=false;if(req.user.role==='donor')eligible=!!db.prepare("SELECT id FROM donations WHERE donor_user_id=? AND status='confirmed' LIMIT 1").get(req.user.id);if(req.user.role==='fundraiser')eligible=!!db.prepare("SELECT id FROM campaigns WHERE user_id=? AND status IN ('approved','closed') LIMIT 1").get(req.user.id);if(!eligible)return res.status(403).json({error:'Please complete a genuine CareFund activity before rating the platform'});db.prepare(`INSERT INTO platform_ratings(user_id,rating,review) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET rating=excluded.rating,review=excluded.review,updated_at=CURRENT_TIMESTAMP`).run(req.user.id,rating,review);res.json({ok:true,trust:platformTrust()});});
-function makeEmailTransport(){
-  if(!process.env.SMTP_HOST) return null;
-  return nodemailer.createTransport({host:process.env.SMTP_HOST,port:Number(process.env.SMTP_PORT||587),secure:String(process.env.SMTP_SECURE||'false')==='true',auth:process.env.SMTP_USER?{user:process.env.SMTP_USER,pass:process.env.SMTP_PASS}:undefined});
+async function sendResendEmail({name,email,subject,text,html}){
+  if(!process.env.RESEND_API_KEY){
+    console.log(`CareFund email service not configured for ${email}`);
+    return false;
+  }
+
+  try{
+    const response=await fetch('https://api.resend.com/emails',{
+      method:'POST',
+      headers:{
+        'Authorization':`Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type':'application/json'
+      },
+      body:JSON.stringify({
+        from:process.env.MAIL_FROM||'onboarding@resend.dev',
+        to:[email],
+        subject,
+        text,
+        html
+      })
+    });
+
+    if(!response.ok){
+      const error=await response.text();
+      console.error('CareFund Resend email error:',error);
+      return false;
+    }
+
+    return true;
+  }catch(error){
+    console.error('CareFund Resend connection error:',error);
+    return false;
+  }
 }
+
 function parseCookies(req){const out={};String(req.headers.cookie||'').split(';').forEach(part=>{const i=part.indexOf('=');if(i>0)out[part.slice(0,i).trim()]=decodeURIComponent(part.slice(i+1).trim())});return out;}
 function setDeviceCookie(res,raw){const secure=String(process.env.NODE_ENV||'').toLowerCase()==='production'?' Secure':'';res.setHeader('Set-Cookie',`carefund_device=${encodeURIComponent(raw)}; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax${secure}`);}
 function deviceHash(raw){return crypto.createHash('sha256').update(String(raw||'')).digest('hex');}
 function issueTrustedDevice(userId){const raw=crypto.randomBytes(32).toString('hex'),hash=deviceHash(raw);db.prepare('INSERT INTO trusted_devices(user_id,token_hash) VALUES(?,?)').run(userId,hash);return {raw,hash};}
 function trustedDeviceFor(req,userId){const raw=parseCookies(req).carefund_device;if(!raw)return null;const hash=deviceHash(raw);const row=db.prepare('SELECT id FROM trusted_devices WHERE user_id=? AND token_hash=?').get(userId,hash);if(row)db.prepare('UPDATE trusted_devices SET last_used_at=CURRENT_TIMESTAMP WHERE id=?').run(row.id);return row?{raw,hash}:null;}
+
 async function sendNewDeviceLoginEmail(name,email,token){
   const base=String(process.env.APP_BASE_URL||'http://localhost:3000').replace(/\/$/,'');
   const link=`${base}/?device_confirm=${encodeURIComponent(token)}`;
-  const transport=makeEmailTransport();
-  if(!transport){console.log(`CareFund new-device login confirmation for ${email}: ${link}`);return false;}
-  await transport.sendMail({from:process.env.MAIL_FROM||process.env.SMTP_USER,to:email,subject:'Confirm new device login to CareFund',text:`Hello ${name},\n\nA login to your CareFund account was attempted from a new phone or computer. If this was you, confirm the new device by opening this link:\n${link}\n\nThis link expires in 30 minutes. If you did not make this login attempt, ignore this email and consider changing your password.`,html:`<p>Hello ${String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p><p>A login to your CareFund account was attempted from a <b>new phone or computer</b>.</p><p>If this was you, confirm the new device by tapping the button below.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm new device login</a></p><p>This link expires in 30 minutes. If you did not make this login attempt, ignore this email and consider changing your password.</p>`});
-  return true;
+  const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Confirm new device login to CareFund',
+    text:`Hello ${name},
+
+A login to your CareFund account was attempted from a new phone or computer. If this was you, confirm the new device by opening this link:
+${link}
+
+This link expires in 30 minutes. If you did not make this login attempt, ignore this email and consider changing your password.`,
+    html:`<p>Hello ${safeName},</p><p>A login to your CareFund account was attempted from a <b>new phone or computer</b>.</p><p>If this was you, confirm the new device by tapping the button below.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm new device login</a></p><p>This link expires in 30 minutes. If you did not make this login attempt, ignore this email and consider changing your password.</p>`
+  });
 }
+
 async function sendConfirmationEmail(name,email,token){
   const base=String(process.env.APP_BASE_URL||'http://localhost:3000').replace(/\/$/,'');
   const link=`${base}/?email_confirm=${encodeURIComponent(token)}`;
-  const transport=makeEmailTransport();
-  if(!transport){console.log(`CareFund email confirmation for ${email}: ${link}`);return false;}
-  await transport.sendMail({from:process.env.MAIL_FROM||process.env.SMTP_USER,to:email,subject:'Confirm your CareFund registration',text:`Hello ${name},\n\nConfirm your CareFund registration by opening this link:\n${link}\n\nThis link expires in 30 minutes.`,html:`<p>Hello ${String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p><p>Confirm your CareFund registration by tapping the button below.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm email & continue registration</a></p><p>This link expires in 30 minutes.</p>`});
-  return true;
+  const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Confirm your CareFund registration',
+    text:`Hello ${name},
+
+Confirm your CareFund registration by opening this link:
+${link}
+
+This link expires in 30 minutes.`,
+    html:`<p>Hello ${safeName},</p><p>Confirm your CareFund registration by tapping the button below.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Confirm email & continue registration</a></p><p>This link expires in 30 minutes.</p>`
+  });
 }
+
 async function sendPasswordResetEmail(name,email,token){
   const base=String(process.env.APP_BASE_URL||'http://localhost:3000').replace(/\/$/,'');
   const link=`${base}/?password_reset=${encodeURIComponent(token)}`;
-  const transport=makeEmailTransport();
-  if(!transport){console.log(`CareFund password reset for ${email}: ${link}`);return false;}
-  await transport.sendMail({from:process.env.MAIL_FROM||process.env.SMTP_USER,to:email,subject:'Reset your CareFund password',text:`Hello ${name},\n\nReset your CareFund password by opening this link:\n${link}\n\nThis link expires in 30 minutes. If you did not request this, you can ignore this email.`,html:`<p>Hello ${String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))},</p><p>We received a request to reset your CareFund password.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`});
-  return true;
-}
+  const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
+  return sendResendEmail({
+    name,
+    email,
+    subject:'Reset your CareFund password',
+    text:`Hello ${name},
+
+Reset your CareFund password by opening this link:
+${link}
+
+This link expires in 30 minutes. If you did not request this, you can ignore this email.`,
+    html:`<p>Hello ${safeName},</p><p>We received a request to reset your CareFund password.</p><p><a href="${link}" style="display:inline-block;padding:12px 18px;background:#087f5b;color:#fff;text-decoration:none;border-radius:8px">Reset password</a></p><p>This link expires in 30 minutes. If you did not request this, you can ignore this email.</p>`
+  });
+}
 
 app.post("/api/auth/register/start",async(req,res)=>{try{
   const {name,email,role="donor"}=req.body;
