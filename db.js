@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT,campaig
 CREATE TABLE IF NOT EXISTS platform_ratings (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL UNIQUE,rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),review TEXT DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 `);
 function add(col, sql){ try{ db.exec(`ALTER TABLE users ADD COLUMN ${col} ${sql}`); }catch{} }
+add('title', "TEXT NOT NULL DEFAULT 'Mr.'");
 // Compatibility migrations for older v3 databases.
 add('country', "TEXT DEFAULT ''"); add('profile_photo', "TEXT"); add('date_of_birth', "TEXT"); add('phone', "TEXT"); add('kyc_status', "TEXT NOT NULL DEFAULT 'pending'"); add('liveness_status', "TEXT NOT NULL DEFAULT 'missing'"); add('liveness_file', "TEXT"); add('account_status', "TEXT NOT NULL DEFAULT 'active'"); add('receipt_deadline', "TEXT");
 function addCampaign(col, sql){ try{db.exec(`ALTER TABLE campaigns ADD COLUMN ${col} ${sql}`);}catch{} }
@@ -58,12 +59,7 @@ addWithV8('confirmation_started_at','TEXT'); addWithV8('confirmation_deadline','
 db.exec(`
 
 CREATE TABLE IF NOT EXISTS trusted_devices (
- id INTEGER PRIMARY KEY AUTOINCREMENT,
- user_id INTEGER NOT NULL,
- token_hash TEXT NOT NULL UNIQUE,
- device_label TEXT DEFAULT '',
- last_used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
- created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, title TEXT NOT NULL DEFAULT 'Mr.', name TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('donor','fundraiser')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_trusted_devices_user ON trusted_devices(user_id);
