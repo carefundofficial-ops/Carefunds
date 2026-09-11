@@ -8,7 +8,7 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
- id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+ id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL DEFAULT 'Mr.', name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
  role TEXT NOT NULL DEFAULT 'donor' CHECK(role IN ('donor','fundraiser','admin')), country TEXT DEFAULT '', profile_photo TEXT,
  date_of_birth TEXT, phone TEXT, kyc_status TEXT NOT NULL DEFAULT 'pending', liveness_status TEXT NOT NULL DEFAULT 'missing',
  liveness_file TEXT, account_status TEXT NOT NULL DEFAULT 'active', receipt_deadline TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -37,9 +37,8 @@ CREATE TABLE IF NOT EXISTS reports (id INTEGER PRIMARY KEY AUTOINCREMENT,campaig
 CREATE TABLE IF NOT EXISTS platform_ratings (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL UNIQUE,rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),review TEXT DEFAULT '',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 `);
 function add(col, sql){ try{ db.exec(`ALTER TABLE users ADD COLUMN ${col} ${sql}`); }catch{} }
-add('title', "TEXT NOT NULL DEFAULT 'Mr.'");
 // Compatibility migrations for older v3 databases.
-add('country', "TEXT DEFAULT ''"); add('profile_photo', "TEXT"); add('date_of_birth', "TEXT"); add('phone', "TEXT"); add('kyc_status', "TEXT NOT NULL DEFAULT 'pending'"); add('liveness_status', "TEXT NOT NULL DEFAULT 'missing'"); add('liveness_file', "TEXT"); add('account_status', "TEXT NOT NULL DEFAULT 'active'"); add('receipt_deadline', "TEXT");
+add('title', "TEXT NOT NULL DEFAULT 'Mr.'"); add('country', "TEXT DEFAULT ''"); add('profile_photo', "TEXT"); add('date_of_birth', "TEXT"); add('phone', "TEXT"); add('kyc_status', "TEXT NOT NULL DEFAULT 'pending'"); add('liveness_status', "TEXT NOT NULL DEFAULT 'missing'"); add('liveness_file', "TEXT"); add('account_status', "TEXT NOT NULL DEFAULT 'active'"); add('receipt_deadline', "TEXT");
 function addCampaign(col, sql){ try{db.exec(`ALTER TABLE campaigns ADD COLUMN ${col} ${sql}`);}catch{} }
 addCampaign('creator_age','INTEGER'); addCampaign('victim_is_minor','INTEGER NOT NULL DEFAULT 0'); addCampaign('relationship',"TEXT DEFAULT ''"); addCampaign('creator_liveness_status',"TEXT NOT NULL DEFAULT 'missing'");
 addCampaign('hospital_name',"TEXT DEFAULT ''"); addCampaign('hospital_address',"TEXT DEFAULT ''"); addCampaign('hospital_phone',"TEXT DEFAULT ''"); addCampaign('doctor_name',"TEXT DEFAULT ''"); addCampaign('diagnosis',"TEXT DEFAULT ''"); addCampaign('treatment_type',"TEXT DEFAULT ''"); addCampaign('estimated_cost_usdt','REAL DEFAULT 0'); addCampaign('verification_notes',"TEXT DEFAULT ''"); addCampaign('verification_status',"TEXT NOT NULL DEFAULT 'pending'"); addCampaign('verified_by','INTEGER'); addCampaign('verified_at','TEXT');
@@ -59,7 +58,12 @@ addWithV8('confirmation_started_at','TEXT'); addWithV8('confirmation_deadline','
 db.exec(`
 
 CREATE TABLE IF NOT EXISTS trusted_devices (
- id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, title TEXT NOT NULL DEFAULT 'Mr.', name TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('donor','fundraiser')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL,
+ token_hash TEXT NOT NULL UNIQUE,
+ device_label TEXT DEFAULT '',
+ last_used_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_trusted_devices_user ON trusted_devices(user_id);
@@ -84,7 +88,7 @@ CREATE TABLE IF NOT EXISTS login_sessions (
 CREATE INDEX IF NOT EXISTS idx_login_sessions_user ON login_sessions(user_id);
 CREATE TABLE IF NOT EXISTS password_resets (id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, user_id INTEGER NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS registration_confirmations (
- id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('donor','fundraiser')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+ id INTEGER PRIMARY KEY AUTOINCREMENT, token_hash TEXT NOT NULL UNIQUE, title TEXT NOT NULL DEFAULT 'Mr.', name TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('donor','fundraiser')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS analytics_visits (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,3 +113,5 @@ CREATE TABLE IF NOT EXISTS campaign_referrals (
  id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,session_key TEXT NOT NULL,FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );
 `);
+
+try{ db.exec("ALTER TABLE registration_confirmations ADD COLUMN title TEXT NOT NULL DEFAULT 'Mr.'"); }catch{}
