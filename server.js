@@ -159,8 +159,12 @@ This link expires in 30 minutes. If you did not request this, you can ignore thi
 }
 
 app.post("/api/auth/register/start",async(req,res)=>{try{
-  const {name,email,role="donor"}=req.body;
-  const n=String(name||'').trim(), e=String(email||'').trim().toLowerCase();
+const {title="Mr.",name,email,role="donor"}=req.body;
+  const t=String(title||'').trim();
+const n=String(name||'').trim(), e=String(email||'').trim().toLowerCase();
+
+if(!["Mr.","Mrs.","Miss","Ms."].includes(t))
+return res.status(400).json({error:"Please select a valid title"});
   if(!n||!e)return res.status(400).json({error:"Full name and email address are required"});
   if(!["donor","fundraiser"].includes(role))return res.status(400).json({error:"Invalid role"});
   if(!/^\S+@\S+\.\S+$/.test(e))return res.status(400).json({error:"Enter a valid email address"});
