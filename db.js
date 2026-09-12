@@ -115,3 +115,4 @@ CREATE TABLE IF NOT EXISTS campaign_referrals (
 `);
 
 try{ db.exec("ALTER TABLE registration_confirmations ADD COLUMN title TEXT NOT NULL DEFAULT 'Mr.'"); }catch{}
+try{ db.exec("ALTER TABLE users ADD COLUMN next_campaign_at TEXT"); }catch{}
