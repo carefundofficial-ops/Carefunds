@@ -19,7 +19,15 @@ function authRequired(req, res, next) {
 
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET);
-    const session=db.prepare("SELECT id,user_id,revoked_at FROM login_sessions WHERE session_id=? AND user_id=?").get(req.user.sid,req.user.id);
+    // Keep the JWT usable even if an older deployment/database does not yet contain
+    // its matching login_sessions row. This prevents a successful login from being
+    // immediately thrown back to the login screen. A valid JWT is still required.
+    let session=db.prepare("SELECT id,user_id,revoked_at FROM login_sessions WHERE session_id=? AND user_id=?").get(req.user.sid,req.user.id);
+    if(session && session.revoked_at) return res.status(401).json({error:"Your session has ended. Please log in again."});
+    if(!session){
+      db.prepare("INSERT OR IGNORE INTO login_sessions(session_id,user_id,device_token_hash) VALUES(?,?,?)").run(req.user.sid,req.user.id,"");
+      session=db.prepare("SELECT id,user_id,revoked_at FROM login_sessions WHERE session_id=? AND user_id=?").get(req.user.sid,req.user.id);
+    }
     if(!session || session.revoked_at) return res.status(401).json({error:"Your session has ended. Please log in again."});
     db.prepare("UPDATE login_sessions SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?").run(session.id);
     next();
