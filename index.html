@@ -90,7 +90,24 @@ async function submitAuth(confirmationToken=''){try{if(authMode==='login'){const
 async function handleDeviceConfirmation(){const t=new URLSearchParams(location.search).get('device_confirm');if(!t)return;try{const d=await api('/auth/confirm-device?token='+encodeURIComponent(t));token=d.token;localStorage.setItem('carefund_token',token);history.replaceState({},document.title,location.pathname+location.hash);await loadMe();showWelcomeBack();alert(d.message)}catch(e){document.getElementById('authTitle').textContent='New device verification';document.getElementById('authFields').innerHTML='<div class="notice">'+esc(e.message)+'</div>';document.getElementById('authStatus').textContent='';document.getElementById('authModal').classList.add('open')}}
 async function handleEmailConfirmation(){const t=new URLSearchParams(location.search).get('email_confirm');if(!t)return;try{const info=await api('/auth/confirm-email?token='+encodeURIComponent(t));renderRegistrationContinuation(info,t);history.replaceState({},document.title,location.pathname+location.hash)}catch(e){document.getElementById('authStatus').textContent=e.message;document.getElementById('authModal').classList.add('open')}}
 async function logoutCareFund(){try{if(token)await api('/auth/logout',{method:'POST'})}catch(e){}token='';me=null;localStorage.removeItem('carefund_token');renderDashboard();document.getElementById('loginBtn').textContent='Log in';document.getElementById('loginBtn').onclick=()=>openAuth('login')}
-async function loadMe(){if(!token){renderDashboard();return}try{const d=await api('/me');me=d.user;renderDashboard()}catch{token='';localStorage.removeItem('carefund_token');renderDashboard()}}
+async function loadMe(){
+  if(!token){
+    renderDashboard();
+    return;
+  }
+
+  try{
+    const d=await api('/me');
+    me=d.user;
+    renderDashboard();
+  }catch(e){
+    console.error('CareFund /me error:',e);
+    alert('Login session error: '+(e.message || 'Could not verify login session'));
+    token='';
+    localStorage.removeItem('carefund_token');
+    renderDashboard();
+  }
+}
 async function loadCampaigns(){try{const d=await api('/campaigns');const ref=Number(localStorage.getItem('carefund_referral_campaign')||0);if(ref)d.campaigns.sort((a,b)=>(a.id===ref?-1:0)-(b.id===ref?-1:0));const el=document.getElementById('campaignList');if(!d.campaigns.length){el.innerHTML='<div class="panel">No active campaigns right now.</div>';return}el.innerHTML=d.campaigns.map(c=>{const pct=Math.min(100,c.raisedUsdt/c.goalUsdt*100);const pic=c.photoUrl?`<img src="${c.photoUrl}" alt="Campaign photo for ${esc(c.patientName)}" loading="lazy">`:'🏥';return`<article class="card"><div class="cardpic">${pic}</div><div class="cardbody"><span class="verified">✓ VERIFIED</span><h3>${esc(c.title)}</h3><p>${esc(c.story).slice(0,130)}…</p><div class="bar"><i style="width:${pct}%"></i></div><div class="money"><b>${Number(c.raisedUsdt).toFixed(2)} USDT</b><span>${Number(c.goalUsdt).toFixed(2)} goal</span></div><button class="btn primary" onclick="openCampaign(${c.id})">Donate with USDT</button></div></article>`}).join('')}catch(e){document.getElementById('campaignList').innerHTML='<div class="panel">Unable to load campaigns.</div>'}}
 async function openCampaign(id){localStorage.setItem('carefund_referral_campaign',String(id));const d=await api('/campaigns/'+id);selected=d.campaign;document.getElementById('campaignTitle').textContent=selected.title;document.getElementById('campaignStory').textContent=selected.story;const pct=Math.min(100,selected.raisedUsdt/selected.goalUsdt*100);document.getElementById('campaignBar').style.width=pct+'%';document.getElementById('campaignRaised').textContent=Number(selected.raisedUsdt).toFixed(2)+' USDT raised';document.getElementById('campaignGoal').textContent='of '+Number(selected.goalUsdt).toFixed(2)+' USDT';const main=document.getElementById('campaignMainPhoto');main.innerHTML=selected.photoUrl?`<img src="${selected.photoUrl}" alt="Campaign photo">`:'🏥';const thumbs=document.getElementById('campaignGalleryThumbs');thumbs.innerHTML=(d.files||[]).map(f=>`<img src="${f.url}" alt="Campaign photo" style="width:72px;height:58px;object-fit:cover;border-radius:8px;cursor:pointer;border:1px solid #dce9e3" onclick="document.getElementById('campaignMainPhoto').innerHTML='<img src=\"${f.url}\" alt=\"Campaign photo\">'">`).join('');document.getElementById('campaign-detail').classList.remove('hidden');document.getElementById('campaign-detail').scrollIntoView({behavior:'smooth'})}
 function openDonation(){if(!token){openAuth('login','donor');return}document.getElementById('donationBox').classList.remove('hidden')}
