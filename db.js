@@ -49,7 +49,7 @@ module.exports=db;
 
 // CareFund V8 feature migrations
 function addUserV8(col, sql){ try{ db.exec(`ALTER TABLE users ADD COLUMN ${col} ${sql}`); }catch{} }
-addUserV8('email_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('email_verification_token','TEXT'); addUserV8('gender',"TEXT DEFAULT ''"); addUserV8('age','INTEGER'); addUserV8('state',"TEXT DEFAULT ''"); addUserV8('address',"TEXT DEFAULT ''"); addUserV8('occupation',"TEXT DEFAULT ''"); addUserV8('donor_rating','REAL NOT NULL DEFAULT 0'); addUserV8('inspiration_last_shown','TEXT'); addUserV8('country_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('password_changed_at','TEXT');
+addUserV8('email_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('email_verification_token','TEXT'); addUserV8('gender',"TEXT DEFAULT ''"); addUserV8('age','INTEGER'); addUserV8('state',"TEXT DEFAULT ''"); addUserV8('address',"TEXT DEFAULT ''"); addUserV8('occupation',"TEXT DEFAULT ''"); addUserV8('donor_rating','REAL NOT NULL DEFAULT 0'); addUserV8('inspiration_last_shown','TEXT'); addUserV8('country_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('password_changed_at','TEXT'); addUserV8('next_campaign_at','TEXT');
 function addCampV8(col, sql){ try{ db.exec(`ALTER TABLE campaigns ADD COLUMN ${col} ${sql}`); }catch{} }
 addCampV8('withdrawal_disabled_at','TEXT'); addCampV8('public_hidden_at','TEXT'); addCampV8('next_campaign_at','TEXT'); addCampV8('referral_priority','INTEGER NOT NULL DEFAULT 0');
 function addWithV8(col, sql){ try{ db.exec(`ALTER TABLE withdrawals ADD COLUMN ${col} ${sql}`); }catch{} }
@@ -115,4 +115,3 @@ CREATE TABLE IF NOT EXISTS campaign_referrals (
 `);
 
 try{ db.exec("ALTER TABLE registration_confirmations ADD COLUMN title TEXT NOT NULL DEFAULT 'Mr.'"); }catch{}
-try{ db.exec("ALTER TABLE users ADD COLUMN next_campaign_at TEXT"); }catch{}
