@@ -14,7 +14,12 @@ function signUser(user, deviceTokenHash) {
 
 function authRequired(req, res, next) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  let token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) {
+    const cookies = String(req.headers.cookie || '').split(';').map(x=>x.trim());
+    const authCookie = cookies.find(x=>x.startsWith('carefund_auth='));
+    if (authCookie) token = decodeURIComponent(authCookie.slice('carefund_auth='.length));
+  }
   if (!token) return res.status(401).json({ error: "Authentication required" });
 
   try {
