@@ -68,7 +68,24 @@ async function openHealth(id){const d=await api('/health-information/'+id);const
 
 
 async function renderAdmin(){try{
-const [o,c,d,w,n,u,r,pr,t,m,h]=await Promise.all([api('/admin/overview'),api('/admin/campaigns?status=pending'),api('/admin/donations/pending'),api('/admin/withdrawals'),api('/admin/notifications'),api('/admin/users'),api('/admin/reports'),api('/admin/platform-ratings'),api('/admin/testimonies'),api('/admin/messages'),api('/admin/health-information')]);
+const dashboard=document.getElementById('dashboard');
+// Render the admin shell FIRST. If one optional admin endpoint fails, the user must
+// still see the Admin Dashboard instead of falling back to the public account cards.
+dashboard.innerHTML='<div class="panel"><h2>🛡️ CareFund Admin Control Center</h2><p class="story">Loading your administrator dashboard…</p><div class="notice">Your admin login was accepted. Loading dashboard data…</div></div>';
+const safe=async(path,fallback)=>{try{return await api(path)}catch(e){console.error('CareFund admin endpoint failed',path,e);return fallback}};
+const [o,c,d,w,n,u,r,pr,t,m,h]=await Promise.all([
+ safe('/admin/overview',{campaigns:[],donations:[],withdrawals:[],openReports:0,unreadNotifications:0}),
+ safe('/admin/campaigns?status=pending',{campaigns:[]}),
+ safe('/admin/donations/pending',{donations:[]}),
+ safe('/admin/withdrawals',{withdrawals:[]}),
+ safe('/admin/notifications',{notifications:[]}),
+ safe('/admin/users',{users:[]}),
+ safe('/admin/reports',{reports:[]}),
+ safe('/admin/platform-ratings',{ratings:[]}),
+ safe('/admin/testimonies',{testimonies:[]}),
+ safe('/admin/messages',{messages:[]}),
+ safe('/admin/health-information',{articles:[]})
+]);
 const count=(arr,key)=>{const x=arr.find(v=>v.status===key);return x?x.n:0};
 const stat=(label,value)=>`<div class="notice"><small>${label}</small><div style="font-size:25px;font-weight:900;margin-top:4px">${value}</div></div>`;
 const userRows=u.users.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.email)}</td><td>${x.role}</td><td>${esc(x.kyc_status||'—')}</td><td>${esc(x.account_status)}</td><td>${x.role==='admin'?'—':`<button class="btn ${x.account_status==='suspended'?'primary':'danger'}" onclick="adminSetUserStatus(${x.id},'${x.account_status==='suspended'?'active':'suspended'}')">${x.account_status==='suspended'?'Restore':'Suspend'}</button>`}</td></tr>`).join('')||'<tr><td colspan=6>None.</td></tr>';
@@ -77,7 +94,7 @@ const ratingRows=pr.ratings.map(x=>`<tr><td>${esc(x.name)}</td><td>${x.role}</td
 const testimonyRows=t.testimonies.map(x=>`<tr><td>${esc(x.name)}</td><td>${'⭐'.repeat(x.rating)}</td><td>${esc(x.message)}</td><td><button class="btn danger" onclick="adminDeleteTestimony(${x.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=4>No testimonies yet.</td></tr>';
 const messageRows=m.messages.map(x=>`<tr><td>${esc(x.sender_name)}</td><td>${esc(x.sender_email)}</td><td>${esc(x.body)}</td><td>${esc(x.created_at)}</td></tr>`).join('')||'<tr><td colspan=4>No support messages.</td></tr>';
 const healthRows=h.articles.map(x=>`<tr><td>${esc(x.title)}</td><td>${x.published?'Published':'Hidden'}</td><td><button class="btn soft" onclick="adminEditHealth(${x.id})">Edit</button> <button class="btn danger" onclick="adminDeleteHealth(${x.id})">Delete</button></td></tr>`).join('')||'<tr><td colspan=3>No articles.</td></tr>';
-const dashboard=document.getElementById('dashboard');dashboard.innerHTML=`<div class="panel"><h2>🛡️ CareFund Admin Control Center</h2><p class="story">One place to monitor verification, donations, withdrawals, users, support and trust content.</p><div class="admin-stats">${stat('Total users',u.users.length)}${stat('Pending campaigns',count(o.campaigns,'pending'))}${stat('Pending donations',count(o.donations,'pending'))}${stat('Pending withdrawals',count(o.withdrawals,'pending'))}</div><div class="admin-stats">${stat('Confirmed donations',count(o.donations,'confirmed'))}${stat('Sent withdrawals',count(o.withdrawals,'sent'))}${stat('Open reports',o.openReports)}${stat('Admin notifications',o.unreadNotifications)}</div></div>
+dashboard.innerHTML=`<div class="panel"><h2>🛡️ CareFund Admin Control Center</h2><p class="story">One place to monitor verification, donations, withdrawals, users, support and trust content.</p><div class="admin-stats">${stat('Total users',u.users.length)}${stat('Pending campaigns',count(o.campaigns,'pending'))}${stat('Pending donations',count(o.donations,'pending'))}${stat('Pending withdrawals',count(o.withdrawals,'pending'))}</div><div class="admin-stats">${stat('Confirmed donations',count(o.donations,'confirmed'))}${stat('Sent withdrawals',count(o.withdrawals,'sent'))}${stat('Open reports',o.openReports)}${stat('Admin notifications',o.unreadNotifications)}</div></div>
 <div class="panel"><h3>📋 Campaigns awaiting verification</h3>${c.campaigns.map(x=>`<div class="notice" style="margin-bottom:10px"><b>${esc(x.title)}</b><br>${esc(x.patientName)}<br><button class="btn primary" style="margin-top:7px" onclick="openCampaignReview(${x.id})">🔎 Review evidence</button></div>`).join('')||'<p class="story">None.</p>'}</div>
 <div class="panel"><h3>💰 Pending donation claims</h3><div class="tablewrap"><table class="table"><tr><th>Donor</th><th>Campaign</th><th>Amount</th><th>TXID</th><th>Action</th></tr>${d.donations.map(x=>`<tr><td>${esc(x.donor_name||'Unknown')}</td><td>${esc(x.title)}</td><td>${x.amount_usdt}</td><td>${esc(x.tx_hash)}</td><td><button class="btn primary" onclick="adminReceiveDonation(${x.id})">Received</button> <button class="btn danger" onclick="adminRejectDonation(${x.id})">Reject</button></td></tr>`).join('')||'<tr><td colspan=5>None.</td></tr>'}</table></div></div>
 <div class="panel"><h3>🏦 Withdrawals</h3><div class="tablewrap"><table class="table"><tr><th>Beneficiary</th><th>Campaign</th><th>Requested</th><th>Net</th><th>Status</th><th>Action</th></tr>${w.withdrawals.map(x=>`<tr><td>${esc(x.beneficiary_name)}</td><td>${esc(x.title)}</td><td>${x.amount_usdt}</td><td>${x.net_usdt}</td><td>${x.status}</td><td>${x.status==='pending'?`<button class="btn soft" onclick="adminApproveWithdrawal(${x.id})">Approve</button> <button class="btn danger" onclick="adminRejectWithdrawal(${x.id})">Reject</button>`:''}${['approved','processing'].includes(x.status)?`<button class="btn primary" onclick="adminSendWithdrawal(${x.id})">Funds Sent</button> <button class="btn danger" onclick="adminRejectWithdrawal(${x.id})">Reject</button>`:''}</td></tr>`).join('')||'<tr><td colspan=6>None.</td></tr>'}</table></div></div>
