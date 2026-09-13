@@ -61,20 +61,21 @@ app.get("/api/platform-rating",(req,res)=>{const rows=db.prepare(`SELECT r.ratin
 app.get("/api/platform-rating/me",authRequired,(req,res)=>res.json({rating:db.prepare("SELECT rating,review,created_at,updated_at FROM platform_ratings WHERE user_id=?").get(req.user.id)||null}));
 app.post("/api/platform-rating",authRequired,(req,res)=>{if(!['donor','fundraiser'].includes(req.user.role))return res.status(403).json({error:'Only donor and fundraiser accounts can rate CareFund'});const rating=Number(req.body.rating),review=String(req.body.review||'').trim().slice(0,500);if(!Number.isInteger(rating)||rating<1||rating>5)return res.status(400).json({error:'Choose a rating from 1 to 5 stars'});let eligible=false;if(req.user.role==='donor')eligible=!!db.prepare("SELECT id FROM donations WHERE donor_user_id=? AND status='confirmed' LIMIT 1").get(req.user.id);if(req.user.role==='fundraiser')eligible=!!db.prepare("SELECT id FROM campaigns WHERE user_id=? AND status IN ('approved','closed') LIMIT 1").get(req.user.id);if(!eligible)return res.status(403).json({error:'Please complete a genuine CareFund activity before rating the platform'});db.prepare(`INSERT INTO platform_ratings(user_id,rating,review) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET rating=excluded.rating,review=excluded.review,updated_at=CURRENT_TIMESTAMP`).run(req.user.id,rating,review);res.json({ok:true,trust:platformTrust()});});
 async function sendResendEmail({name,email,subject,text,html}){
-  if(!process.env.RESEND_API_KEY){
-    console.log(`CareFund email service not configured for ${email}`);
-    return false;
+  const apiKey=String(process.env.RESEND_API_KEY||'').trim();
+  if(!apiKey){
+    console.error(`CareFund email service not configured: RESEND_API_KEY is missing (recipient ${email})`);
+    return {sent:false,code:'not_configured',error:'RESEND_API_KEY is missing on the server.'};
   }
 
   try{
     const response=await fetch('https://api.resend.com/emails',{
       method:'POST',
       headers:{
-        'Authorization':`Bearer ${process.env.RESEND_API_KEY}`,
+        'Authorization':`Bearer ${apiKey}`,
         'Content-Type':'application/json'
       },
       body:JSON.stringify({
-        from:'onboarding@resend.dev',
+        from:'CareFund <onboarding@resend.dev>',
         to:[email],
         subject,
         text,
@@ -82,16 +83,22 @@ async function sendResendEmail({name,email,subject,text,html}){
       })
     });
 
+    const raw=await response.text();
+    let data={};
+    try{data=raw?JSON.parse(raw):{};}catch{data={message:raw};}
+
     if(!response.ok){
-      const error=await response.text();
-      console.error('CareFund Resend email error:',error);
-      return false;
+      const providerMessage=String(data?.message||data?.error||raw||`HTTP ${response.status}`).trim().slice(0,500);
+      console.error(`CareFund Resend email error (${response.status}) for ${email}:`,providerMessage);
+      return {sent:false,code:'provider_error',status:response.status,error:providerMessage};
     }
 
-    return true;
+    console.log(`CareFund email sent via Resend to ${email}; id=${data?.id||'unknown'}`);
+    return {sent:true,code:'sent',id:data?.id||null};
   }catch(error){
-    console.error('CareFund Resend connection error:',error);
-    return false;
+    const message=String(error?.message||error||'Unknown connection error').slice(0,500);
+    console.error(`CareFund Resend connection error for ${email}:`,message);
+    return {sent:false,code:'connection_error',error:message};
   }
 }
 
@@ -169,8 +176,10 @@ app.post("/api/auth/register/start",async(req,res)=>{try{
   const raw=crypto.randomBytes(32).toString('hex'), hash=crypto.createHash('sha256').update(raw).digest('hex');
   db.prepare("DELETE FROM registration_confirmations WHERE email=? OR expires_at<=CURRENT_TIMESTAMP").run(e);
   db.prepare("INSERT INTO registration_confirmations(token_hash,title,name,email,role,expires_at) VALUES(?,?,?,?,?,datetime('now','+30 minutes'))").run(hash,t,n,e,role);
-  const sent=await sendConfirmationEmail(n,e,raw);
-  res.status(201).json({ok:true,email:e,emailSent:sent,message:sent?'Confirmation link sent to your email.':'Email service is not configured; the confirmation link was logged by the server.'});
+  const mail=await sendConfirmationEmail(n,e,raw);
+  const sent=!!mail?.sent;
+  const message=sent?'Confirmation link sent to your email.':mail?.code==='not_configured'?'Email service is not configured on the server.':`Email delivery failed (${mail?.status||mail?.code||'unknown'}): ${mail?.error||'Please check the server email configuration.'}`;
+  res.status(201).json({ok:true,email:e,emailSent:sent,emailStatus:mail?.code||'unknown',emailError:sent?null:(mail?.error||null),message});
 }catch(e){console.error(e);res.status(500).json({error:"Could not start registration"})}});
 
 app.get("/api/auth/confirm-email",(req,res)=>{try{
@@ -205,7 +214,7 @@ app.post("/api/auth/forgot-password",async(req,res)=>{try{
   db.prepare("DELETE FROM password_resets WHERE user_id=?").run(u.id);
   const raw=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(raw).digest('hex');
   db.prepare("INSERT INTO password_resets(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 minutes'))").run(hash,u.id);
-  const sent=await sendPasswordResetEmail(u.name,u.email,raw);
+  const mail=await sendPasswordResetEmail(u.name,u.email,raw); const sent=!!mail?.sent;
   res.json({ok:true,emailSent:sent,message:'If that email is registered, a password reset link has been sent.'});
 }catch(e){console.error(e);res.status(500).json({error:'Could not start password reset'})}});
 app.get("/api/auth/reset-password",(req,res)=>{const raw=String(req.query.token||''),hash=crypto.createHash('sha256').update(raw).digest('hex');const p=db.prepare("SELECT pr.expires_at,u.title,u.name,u.email,u.role FROM password_resets pr JOIN users u ON u.id=pr.user_id WHERE pr.token_hash=? AND pr.expires_at>CURRENT_TIMESTAMP").get(hash);if(!p)return res.status(400).json({error:'This password reset link is invalid or expired. Please request a new one.'});res.json({ok:true,title:p.title||'Mr.',name:p.name,email:p.email,role:p.role});});
@@ -224,7 +233,7 @@ if(!trusted){
   }else{
     const deviceCount=Number(db.prepare("SELECT COUNT(*) n FROM trusted_devices WHERE user_id=?").get(u.id)?.n||0);
     if(deviceCount===0){const device=issueTrustedDevice(u.id);setDeviceCookie(res,device.raw);trusted=device;}
-    else{db.prepare("DELETE FROM login_challenges WHERE user_id=? OR expires_at<=CURRENT_TIMESTAMP").run(u.id);const raw=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(raw).digest('hex');db.prepare("INSERT INTO login_challenges(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 minutes'))").run(hash,u.id);const sent=await sendNewDeviceLoginEmail(u.name,u.email,raw);return res.status(202).json({requiresDeviceConfirmation:true,emailSent:sent,message:sent?'For your security, this phone or computer is not trusted yet. We sent a confirmation link to your CareFund email. Open it on this device to complete login.':'For your security, this phone or computer is not trusted yet. The confirmation link was logged by the server because email service is not configured.'});}
+    else{db.prepare("DELETE FROM login_challenges WHERE user_id=? OR expires_at<=CURRENT_TIMESTAMP").run(u.id);const raw=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(raw).digest('hex');db.prepare("INSERT INTO login_challenges(token_hash,user_id,expires_at) VALUES(?,?,datetime('now','+30 minutes'))").run(hash,u.id);const mail=await sendNewDeviceLoginEmail(u.name,u.email,raw);const sent=!!mail?.sent;return res.status(202).json({requiresDeviceConfirmation:true,emailSent:sent,emailStatus:mail?.code||'unknown',emailError:sent?null:(mail?.error||null),message:sent?'For your security, this phone or computer is not trusted yet. We sent a confirmation link to your CareFund email. Open it on this device to complete login.':mail?.code==='not_configured'?'For your security, this phone or computer is not trusted yet. Email service is not configured on the server.':`For your security, this phone or computer is not trusted yet. Email delivery failed (${mail?.status||mail?.code||'unknown'}): ${mail?.error||'Please check the server email configuration.'}`});}
   }
 }
 const safe={id:u.id,title:u.title||'Mr.',name:u.name,email:u.email,role:u.role,country:u.country,profilePhoto:u.profile_photo,kycStatus:u.kyc_status,livenessStatus:u.liveness_status,passwordChangedAt:u.password_changed_at};const jwtToken=signUser(safe,trusted.hash);setAuthCookie(res,jwtToken);console.log(`[CareFund LOGIN SUCCESS] email=${u.email} userId=${u.id} role=${u.role} sessionCreated=true`);res.json({user:safe,token:jwtToken,loginSuccess:true});}catch(e){console.error(e);res.status(500).json({error:"Could not log in"})}});
