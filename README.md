@@ -1,10 +1,2 @@
-# CareFund V17 — Live deployment fix
-
-This version fixes the login/register buttons being unresponsive on deployments using Helmet.
-The frontend uses inline JavaScript and inline onclick handlers, so the server disables Helmet's
-Content Security Policy while retaining the other Helmet security headers.
-
-Render settings:
-- Build Command: npm install
-- Start Command: node server.js
-- Health Check Path: /api/health
+# CareFund V26 — Admin Login Diagnostic
+This is based on V25 and keeps the heartbeat/session changes. It adds only safe login diagnostics (email/user ID/role, never password or token) to the Render log and browser console so the admin login path can be identified without changing CareFund functionality.
