@@ -49,7 +49,7 @@ module.exports=db;
 
 // CareFund V8 feature migrations
 function addUserV8(col, sql){ try{ db.exec(`ALTER TABLE users ADD COLUMN ${col} ${sql}`); }catch{} }
-addUserV8('email_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('email_verification_token','TEXT'); addUserV8('gender',"TEXT DEFAULT ''"); addUserV8('age','INTEGER'); addUserV8('state',"TEXT DEFAULT ''"); addUserV8('address',"TEXT DEFAULT ''"); addUserV8('occupation',"TEXT DEFAULT ''"); addUserV8('donor_rating','REAL NOT NULL DEFAULT 0'); addUserV8('inspiration_last_shown','TEXT'); addUserV8('country_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('password_changed_at','TEXT'); function addCampV8(col, sql){ try{ db.exec(`ALTER TABLE campaigns ADD COLUMN ${col} ${sql}`); }catch{} }
+addUserV8('email_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('deletion_requested_at','TEXT'); addUserV8('deletion_deadline','TEXT'); addUserV8('recovery_requested_at','TEXT'); addUserV8('recovery_ready_at','TEXT'); addUserV8('withdrawal_method',"TEXT DEFAULT 'crypto'"); addUserV8('withdrawal_wallet',"TEXT DEFAULT ''"); addUserV8('withdrawal_bank_name',"TEXT DEFAULT ''"); addUserV8('withdrawal_account_number',"TEXT DEFAULT ''"); addUserV8('withdrawal_account_name',"TEXT DEFAULT ''"); addUserV8('withdrawal_updated_at','TEXT'); addUserV8('withdrawal_lock_until','TEXT'); addUserV8('email_verification_token','TEXT'); addUserV8('gender',"TEXT DEFAULT ''"); addUserV8('age','INTEGER'); addUserV8('state',"TEXT DEFAULT ''"); addUserV8('address',"TEXT DEFAULT ''"); addUserV8('occupation',"TEXT DEFAULT ''"); addUserV8('donor_rating','REAL NOT NULL DEFAULT 0'); addUserV8('inspiration_last_shown','TEXT'); addUserV8('country_verified','INTEGER NOT NULL DEFAULT 0'); addUserV8('password_changed_at','TEXT'); function addCampV8(col, sql){ try{ db.exec(`ALTER TABLE campaigns ADD COLUMN ${col} ${sql}`); }catch{} }
 addCampV8('withdrawal_disabled_at','TEXT'); addCampV8('public_hidden_at','TEXT'); addCampV8('next_campaign_at','TEXT'); addCampV8('referral_priority','INTEGER NOT NULL DEFAULT 0');
 function addWithV8(col, sql){ try{ db.exec(`ALTER TABLE withdrawals ADD COLUMN ${col} ${sql}`); }catch{} }
 addWithV8('confirmation_started_at','TEXT'); addWithV8('confirmation_deadline','TEXT'); addWithV8('confirmation_notified_at','TEXT'); addWithV8('suspension_applied','INTEGER NOT NULL DEFAULT 0'); addWithV8('balance_before','REAL NOT NULL DEFAULT 0'); addWithV8('balance_after','REAL NOT NULL DEFAULT 0');
@@ -111,6 +111,14 @@ CREATE TABLE IF NOT EXISTS health_articles (
 CREATE TABLE IF NOT EXISTS campaign_referrals (
  id INTEGER PRIMARY KEY AUTOINCREMENT,campaign_id INTEGER NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,session_key TEXT NOT NULL,FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS platform_share_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ title TEXT NOT NULL DEFAULT 'CareFund — Verified Medical Fundraising',
+ message TEXT NOT NULL DEFAULT 'CareFund helps connect people facing urgent medical expenses with supporters through verified emergency medical fundraising.',
+ image_file TEXT DEFAULT '',
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO platform_share_settings(id,title,message,image_file) VALUES(1,'CareFund — Verified Medical Fundraising','CareFund helps connect people facing urgent medical expenses with supporters through verified emergency medical fundraising. Support verified medical fundraising and learn more about CareFund.','');
 `);
 
 try{ db.exec("ALTER TABLE registration_confirmations ADD COLUMN title TEXT NOT NULL DEFAULT 'Mr.'"); }catch{}
