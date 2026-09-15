@@ -110,11 +110,12 @@ async function sendResendEmail({name,email,subject,text,html}){
         'Content-Type':'application/json'
       },
       body:JSON.stringify({
-        from:'CareFund <onboarding@resend.dev>',
+        from: String(process.env.MAIL_FROM||'CareFund <onboarding@resend.dev>').trim(),
         to:[email],
         subject,
         text,
-        html
+        html,
+        ...(process.env.MAIL_REPLY_TO ? {reply_to:String(process.env.MAIL_REPLY_TO).trim()} : {})
       })
     });
 
@@ -144,7 +145,7 @@ function issueTrustedDevice(userId){const raw=crypto.randomBytes(32).toString('h
 function trustedDeviceFor(req,userId){const raw=parseCookies(req).carefund_device;if(!raw)return null;const hash=deviceHash(raw);const row=db.prepare('SELECT id FROM trusted_devices WHERE user_id=? AND token_hash=?').get(userId,hash);if(row)db.prepare('UPDATE trusted_devices SET last_used_at=CURRENT_TIMESTAMP WHERE id=?').run(row.id);return row?{raw,hash}:null;}
 
 async function sendNewDeviceLoginEmail(name,email,token){
-  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const base=String(process.env.APP_BASE_URL||process.env.RENDER_EXTERNAL_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
   const link=`${base}/?device_confirm=${encodeURIComponent(token)}`;
   const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
@@ -163,7 +164,7 @@ This link expires in 30 minutes. If you did not make this login attempt, ignore 
 }
 
 async function sendConfirmationEmail(name,email,token){
-  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const base=String(process.env.APP_BASE_URL||process.env.RENDER_EXTERNAL_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
   const link=`${base}/?email_confirm=${encodeURIComponent(token)}`;
   const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
@@ -182,7 +183,7 @@ This link expires in 30 minutes.`,
 }
 
 async function sendPasswordResetEmail(name,email,token){
-  const base=String(process.env.APP_BASE_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
+  const base=String(process.env.APP_BASE_URL||process.env.RENDER_EXTERNAL_URL||'https://carefunds.onrender.com').replace(/\/$/,'');
   const link=`${base}/?password_reset=${encodeURIComponent(token)}`;
   const safeName=String(name).replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
 
