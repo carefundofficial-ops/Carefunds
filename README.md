@@ -14,3 +14,10 @@ Render environment variables:
 - `MAIL_REPLY_TO` = optional reply-to address
 
 Important: do not set `MAIL_FROM` to a normal Gmail address unless that exact sending domain is supported/verified by your email provider. A custom domain is not required for the CareFund website itself, but Resend requires an appropriate verified sending identity for production email delivery to arbitrary users.
+
+## V43 changes
+- Added a transparent, large circular login loading overlay with “Logging in…” while authentication is processing; login controls are disabled during the request and the overlay closes on success or failure.
+- Added Patient ID Card upload to campaign creation as private admin verification evidence.
+- Added hospital referral status (referred / not referred). Referral Report upload is required only when the creator marks the patient as referred.
+- Campaign submission now gives a specific feedback message and blocks submission when required evidence is missing, including patient ID, medical/supporting evidence, and conditional referral report.
+- Admin campaign review and Track Campaign clearly indicate whether the patient was referred and show the corresponding private evidence.
